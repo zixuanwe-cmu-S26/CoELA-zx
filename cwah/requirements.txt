@@ -9,7 +9,7 @@ ipdb==0.13.11
 matplotlib==3.6.3
 numpy
 open3d==0.16.0
-openai==0.27.0
+openai>=1.0.0
 opencv_python==4.7.0.68
 opencv_python_headless==4.7.0.68
 pandas==1.5.3
