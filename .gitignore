@@ -2,3 +2,4 @@
 executable/
 executable.zip
 .vscode
+test_results/
