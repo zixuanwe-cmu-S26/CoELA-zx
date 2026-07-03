@@ -5,8 +5,9 @@ import torch
 import json
 import os
 import pandas as pd
-from openai.error import OpenAIError
+from openai import OpenAI, AzureOpenAI, OpenAIError
 import backoff
+from dotenv import load_dotenv
 
 
 class LLM:
@@ -43,18 +44,25 @@ class LLM:
 		self.cot = cot
 		self.source = source
 		self.lm_id = lm_id
-		self.chat = 'gpt-3.5-turbo' in lm_id or 'gpt-4' in lm_id
+		self.chat = 'gpt-3.5-turbo' in lm_id or 'gpt-4' in lm_id or "gpt-5.4-mini" in lm_id
 		self.OPENAI_KEY = None
 		self.total_cost = 0
 		self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 		if self.source == 'openai':
-			openai.api_key = os.getenv("OPENAI_KEY")
+			# create an OpenAI client instance
+			load_dotenv()
+			self.client = AzureOpenAI(
+				api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+				azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+				api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+			)
+
 			if self.chat:
 				self.sampling_params = {
-					"max_tokens": sampling_parameters.max_tokens,
-					"temperature": sampling_parameters.t,
-					"top_p": sampling_parameters.top_p,
+					"max_completion_tokens": sampling_parameters.max_tokens,
+					# "temperature": sampling_parameters.t,
+					# "top_p": sampling_parameters.top_p,
 					"n": sampling_parameters.n,
 				}
 			else:
@@ -66,7 +74,7 @@ class LLM:
 					"logprobs": sampling_parameters.logprobs,
 					"echo": sampling_parameters.echo,
 				}
-		elif source == 'huggingface':
+		elif self.source == 'huggingface':
 			self.sampling_params = {
 				"max_new_tokens": sampling_parameters.max_tokens,
 				"temperature": sampling_parameters.t,
@@ -78,10 +86,13 @@ class LLM:
 				'do_sample': True,
 				'early_stopping': True,
 			}
-		elif source == "debug":
+		elif self.source == "debug":
 			self.sampling_params = sampling_parameters
 		else:
 			raise ValueError("invalid source")
+
+		if self.debug:
+			print(f"{self.agent_name} using {self.source} model {self.lm_id} with sampling parameters: {self.sampling_params}")
 
 		def lm_engine(source, lm_id, device):
 			if source == 'huggingface':
@@ -109,30 +120,32 @@ class LLM:
 				if source == 'openai':
 					try:
 						if self.chat:
-							response = openai.ChatCompletion.create(
+							response = self.client.chat.completions.create(
 								model=lm_id, messages=prompt, **sampling_params
 							)
 							# print(json.dumps(response, indent=4))
+							response_dict = self._response_to_dict(response)
 							if self.debug:
 								with open(f"LLM/chat_raw.json", 'a') as f:
-									f.write(json.dumps(response, indent=4))
+									f.write(json.dumps(response_dict, indent=4))
 									f.write('\n')
-							generated_samples = [response['choices'][i]['message']['content'] for i in
+							generated_samples = [response_dict['choices'][i]['message']['content'] for i in
 												 range(sampling_params['n'])]
 							if 'gpt-4' in self.lm_id:
-								usage = response['usage']['prompt_tokens'] * 0.03 / 1000 + response['usage']['completion_tokens'] * 0.06 / 1000
+								usage = response_dict['usage']['prompt_tokens'] * 0.03 / 1000 + response_dict['usage']['completion_tokens'] * 0.06 / 1000
 							elif 'gpt-3.5' in self.lm_id:
-								usage = response['usage']['total_tokens'] * 0.002 / 1000
+								usage = response_dict['usage']['total_tokens'] * 0.002 / 1000
 						# mean_log_probs = [np.mean(response['choices'][i]['logprobs']['token_logprobs']) for i in
 						# 				  range(sampling_params['n'])]
 						elif "text-" in lm_id:
 							response = openai.Completion.create(model=lm_id, prompt=prompt, **sampling_params)
 							# print(json.dumps(response, indent=4))
+							response_dict = self._response_to_dict(response)
 							if self.debug:
 								with open(f"LLM/raw.json", 'a') as f:
-									f.write(json.dumps(response, indent=4))
+									f.write(json.dumps(response_dict, indent=4))
 									f.write('\n')
-							generated_samples = [response['choices'][i]['text'] for i in range(sampling_params['n'])]
+							generated_samples = [response_dict['choices'][i]['text'] for i in range(sampling_params['n'])]
 						# mean_log_probs = [np.mean(response['choices'][i]['logprobs']['token_logprobs']) for i in
 						# 			  range(sampling_params['n'])]
 						else:
@@ -165,6 +178,14 @@ class LLM:
 			return _generate
 
 		self.generator = lm_engine(self.source, self.lm_id, self.device)
+
+	def _response_to_dict(self, response):
+		"""Convert OpenAI SDK response objects into plain dicts."""
+		if hasattr(response, "model_dump"):
+			return response.model_dump()
+		if isinstance(response, dict):
+			return response
+		return json.loads(json.dumps(response, default=lambda o: getattr(o, "__dict__", str(o))))
 
 
 	def reset(self, rooms_name, roomname2id, goal_location, unsatisfied):
@@ -453,4 +474,3 @@ class LLM:
 					 "plan": plan,
 					 "total_cost": self.total_cost})
 		return plan, info
-
