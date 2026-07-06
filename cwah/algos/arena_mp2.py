@@ -11,6 +11,12 @@ import atexit
 
 # @ray.remote
 class ArenaMP(object):
+    """Coordinates agents and the environment for one test/training arena.
+
+    ArenaMP does not implement policy logic or simulator physics. Its job is to
+    reset tasks, ask each agent for an action from the current observation, pass
+    those actions to the environment, and collect logs for analysis.
+    """
     def __init__(self, max_number_steps, arena_id, environment_fn, agent_fn, record_dir='out', debug=False, run_predefined_actions=False):
         # run_predefined_actions is a parameter that you can use predefined_actions.json to strictly set the agents' actions instead of using algorithm to calculate the action.
         self.agents = []
@@ -23,6 +29,8 @@ class ArenaMP(object):
         self.debug = debug
         print("Init Env")
         self.env = environment_fn(arena_id)
+        # agent_fn stores factory functions rather than ready-made instances so
+        # ArenaMP can recreate agents together with a fresh environment.
         for agent_type_fn in agent_fn:
             self.agents.append(agent_type_fn(arena_id, self.env))
 
@@ -39,6 +47,7 @@ class ArenaMP(object):
 
 
     def reset(self, task_id=None):
+        """Reset the environment to a task case and initialize all agents."""
         self.cnt_duplicate_subgoal = 0
         self.cnt_nouse_subgoal = 0
         if self.run_predefined_actions:
@@ -50,6 +59,9 @@ class ArenaMP(object):
             ob = self.env.reset(task_id=task_id)
 
         for it, agent in enumerate(self.agents):
+            # Different agent families require different reset context:
+            # symbolic LLMs need room/object names and goal specs, while MCTS
+            # agents usually need the full graph and raw task goal.
             if 'LLM_vision' in agent.agent_type:
                 agent.reset(ob[it], self.env.all_containers_name, self.env.all_goal_objects_name, self.env.all_room_name, self.env.goal_spec[it])
             elif 'vision' in agent.agent_type:
@@ -69,6 +81,7 @@ class ArenaMP(object):
                 agent.actor_critic.load_state_dict(weights)
 
     def get_actions(self, obs, action_space=None, true_graph=False):
+        """Dispatch each agent's observation to its policy and collect actions."""
         if self.run_predefined_actions:
             act = self.action_notes[str(self.action_notes_steps)]
             self.action_notes_steps += 1
@@ -81,6 +94,8 @@ class ArenaMP(object):
         op_subgoal = {0: None, 1: None}
         # pdb.set_trace()
         for it, agent in enumerate(self.agents):
+            # goal_spec is the agent-facing form of the task goal. For LLM
+            # agents, object ids in predicates may be rewritten as <name> (id).
             if self.task_goal is None:
                 goal_spec = self.env.get_goal(self.env.task_goal[it], self.env.agent_goals[it])
 
@@ -113,6 +128,7 @@ class ArenaMP(object):
         return dict_actions, dict_info
 
     def reset_env(self):
+        # Used by recovery paths to replace a broken Unity connection.
         self.env.close()
         self.env = self.env_fn(self.arena_id)
 
@@ -358,6 +374,7 @@ class ArenaMP(object):
 
 
     def step(self, true_graph=False):
+        """Run one environment tick: observe, act, execute."""
         if self.env.steps == 0:
             pass
             #self.env.changed_graph = True
@@ -411,6 +428,8 @@ class ArenaMP(object):
                     }
         success = False
         while True:
+            # The environment returns done/finished after checking task progress;
+            # ArenaMP mirrors that into saved_info and stops the episode.
             (obs, reward, done, infos, messages), actions, agent_info = self.step()
             success = infos['finished']
             # if infos['failed_exec']:

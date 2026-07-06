@@ -3,3 +3,5 @@ executable/
 executable.zip
 .vscode
 test_results/
+.env
+chat_raw.json

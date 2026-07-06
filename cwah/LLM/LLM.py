@@ -11,6 +11,12 @@ from dotenv import load_dotenv
 
 
 class LLM:
+	"""Prompt builder and model caller used by LLM_agent.
+
+	LLM_agent owns environment memory and action execution details; this class
+	turns that memory into text prompts, calls the configured language model, and
+	parses the model output back into one available high-level plan.
+	"""
 	def __init__(self,
 				 source,  # 'huggingface' or 'openai'
 				 lm_id,
@@ -34,6 +40,9 @@ class LLM:
 		self.prompt_template_path = prompt_template_path
 		self.single = 'single' in self.prompt_template_path
 		df = pd.read_csv(self.prompt_template_path)
+		# Prompt CSVs provide a base action-selection prompt and, for
+		# communication runs, a second prompt that asks the model to write a
+		# short message to the teammate.
 		self.prompt_template = df['prompt'][0].replace("$AGENT_NAME$", self.agent_name).replace("$OPPO_NAME$", self.oppo_name)
 		if communication:
 			self.generator_prompt_template = df['prompt'][1].replace("$AGENT_NAME$", self.agent_name).replace("$OPPO_NAME$", self.oppo_name)
@@ -95,6 +104,7 @@ class LLM:
 			print(f"{self.agent_name} using {self.source} model {self.lm_id} with sampling parameters: {self.sampling_params}")
 
 		def lm_engine(source, lm_id, device):
+			"""Return a generator function for OpenAI, HuggingFace, or debug mode."""
 			if source == 'huggingface':
 				from transformers import AutoModelForCausalLM, AutoTokenizer, LLaMATokenizer, LLaMAForCausalLM
 				print(f"loading huggingface model {lm_id}")
@@ -116,6 +126,8 @@ class LLM:
 
 			@backoff.on_exception(backoff.expo, OpenAIError)
 			def _generate(prompt, sampling_params):
+				# prompt is either a chat message list or a raw completion string,
+				# depending on the model family selected by self.chat.
 				usage = 0
 				if source == 'openai':
 					try:
@@ -189,6 +201,7 @@ class LLM:
 
 
 	def reset(self, rooms_name, roomname2id, goal_location, unsatisfied):
+		"""Cache episode-level goal text used in all future prompts."""
 		self.rooms = rooms_name
 		self.roomname2id = roomname2id
 		self.goal_location = goal_location
@@ -197,6 +210,7 @@ class LLM:
 
 
 	def goal2description(self, goals, goal_location_room):  # {predicate: count}
+		"""Convert symbolic goal predicates into a compact natural sentence."""
 		# print(goals)
 		map_rel_to_pred = {
 			'inside': 'into',
@@ -252,6 +266,7 @@ class LLM:
 	# 		return f"[{text.split(']')[0].split('[')[-1]}] {obj1} {obj2}"
 
 	def parse_answer(self, available_actions, text):
+		"""Map model text back to exactly one action from available_actions."""
 		for i in range(len(available_actions)):
 			action = available_actions[i]
 			if action in text:
@@ -277,6 +292,7 @@ class LLM:
 
 
 	def progress2text(self, current_room, grabbed_objects, unchecked_containers, ungrabbed_objects, goal_location_room, satisfied, opponent_grabbed_objects, opponent_last_room, room_explored):
+		"""Summarize symbolic memory as the Progress field in the prompt."""
 		sss = {}
 		for room, objs in ungrabbed_objects.items():
 			cons = unchecked_containers[room]
@@ -367,6 +383,8 @@ class LLM:
 		[send_message] <"">
 		"""
 		available_plans = []
+		# The LLM chooses among these high-level plans. LLM_agent later turns
+		# them into concrete executable actions such as walktowards/open/grab.
 		if self.communication and message is not None:
 			available_plans.append(f"[send_message] <{message}>")
 		for room in self.rooms:
@@ -395,6 +413,7 @@ class LLM:
 
 			
 	def run(self, current_room, grabbed_objects, satisfied, unchecked_containers, ungrabbed_objects, goal_location_room, action_history, dialogue_history, opponent_grabbed_objects, opponent_last_room, room_explored = None):
+		"""Build prompts, call the model, and return the selected high-level plan."""
 		info = {}
 		# goal_desc = self.goal2description(unsatisfied_goal, goal_location_room)
 		progress_desc = self.progress2text(current_room, grabbed_objects, unchecked_containers, ungrabbed_objects, goal_location_room, satisfied, opponent_grabbed_objects, opponent_last_room, room_explored)
@@ -408,6 +427,8 @@ class LLM:
 		if self.communication:
 			prompt = prompt.replace('$DIALOGUE_HISTORY$', dialogue_history_desc)
 			if not action_history[-1].startswith('[send_message]'):
+				# Communication is generated before action selection so the send
+				# message option can appear beside physical plans.
 				gen_prompt = self.generator_prompt_template.replace('$GOAL$', self.goal_desc)
 				gen_prompt = gen_prompt.replace('$PROGRESS$', progress_desc)
 				gen_prompt = gen_prompt.replace('$ACTION_HISTORY$', action_history_desc)
@@ -435,6 +456,8 @@ class LLM:
 		prompt = prompt.replace('$AVAILABLE_ACTIONS$', available_plans)
 
 		if self.cot:
+			# CoT mode performs one reasoning call and a second constrained call
+			# that asks for only the best next action.
 			prompt = prompt + " Let's think step by step."
 			if self.debug:
 				print(f"cot_prompt:\n{prompt}")

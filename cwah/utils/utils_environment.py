@@ -3,6 +3,7 @@ import copy
 import random
 
 def inside_not_trans(graph):
+	"""Normalize INSIDE edges and add derived CLOSE edges for open containers."""
 	#print([{'from_id': 425, 'to_id': 396, 'relation_type': 'ON'}, {'from_id': 425, 'to_id': 396, 'relation_type': 'INSIDE'}])
 	id2node = {node['id']: node for node in graph['nodes']}
 	parents = {}
@@ -93,6 +94,7 @@ def inside_not_trans(graph):
 
 
 def convert_action(action_dict):
+	"""Convert per-agent actions into the joint VirtualHome script format."""
 	agent_do = [item for item, action in action_dict.items() if action is not None]
 	# Make sure only one agent interact with the same object
 	if len(action_dict.keys()) > 1:
@@ -193,6 +195,7 @@ def get_message_name(input_string):
 
 
 def separate_new_ids_graph(graph, max_id):
+	"""Move generated object ids above 1000 to avoid Unity scene id clashes."""
 	new_graph = copy.deepcopy(graph)
 	for node in new_graph['nodes']:
 		if node['id'] > max_id:
@@ -205,7 +208,12 @@ def separate_new_ids_graph(graph, max_id):
 	return new_graph
 
 def check_progress(state, goal_spec):
-	"""TODO: add more predicate checkers; currently only ON"""
+	"""Compare the current graph against symbolic goal predicates.
+
+	goal_spec maps predicates such as on_apple_<table> (123) to
+	[count_needed, mandatory, reward_per_pred]. The return value separates
+	already satisfied predicates from remaining counts.
+	"""
 	unsatisfied = {}
 	satisfied = {}
 	reward = 0.

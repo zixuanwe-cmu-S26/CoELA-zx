@@ -17,6 +17,12 @@ import re
 
 
 class UnityEnvironment(BaseUnityEnvironment):
+	"""C-WAH wrapper around the VirtualHome Unity environment.
+
+	This class owns simulator reset/execution, converts dataset task records into
+	agent-facing goals, builds observations, and checks whether the task is done.
+	Agents never mutate the world directly; they return actions to step().
+	"""
 
 	def __init__(self,
 				 num_agents=2,
@@ -88,6 +94,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		self.keep_move_steps = None
  
 	def reward(self):
+		"""Compute shared reward and episode completion from the current graph."""
 		reward = 0.
 		done = True
 		satisfied, unsatisfied = utils.check_progress(self.get_graph(), self.goal_spec[0])
@@ -104,6 +111,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		return reward, done, {'satisfied_goals': satisfied}
 
 	def get_action_space(self):
+		"""Return ids visible to each symbolic agent as its action object space."""
 		dict_action_space = {}
 		for agent_id in range(self.num_agents):
 			if 'image' in self.observation_types[agent_id]:
@@ -143,6 +151,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		return False
 	
 	def get_goal(self, task_spec, agent_goal):
+		"""Convert a raw dataset task goal into the format used by each agent."""
 		if agent_goal == 'full':
 			pred = [x for x, y in task_spec.items() if y > 0 and x.split('_')[0] in ['on', 'inside']]
 			# object_grab = [pr.split('_')[1] for pr in pred]
@@ -281,6 +290,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		return [node['id'] for node in self.full_graph['nodes'] if node['category'] in ['Rooms']]
 
 	def filter_graph(self, obs):
+		"""Keep only rooms, characters, goal objects, and relevant containers."""
 		relative_id = self.all_relative_id + self.all_room_id
 		new_graph = {
 			"edges": [edge for edge in obs['edges'] if
@@ -290,6 +300,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		return new_graph
 
 	def reset(self, environment_graph=None, task_id=None):
+		"""Load one dataset case, rebuild the Unity scene, and return initial obs."""
 		# Make sure that characters are out of graph, and ids are ok
 		# ipdb.set_trace()
 		self.global_episode_id += 1 # For collecting data
@@ -400,6 +411,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		return max_dis
 
 	def step(self, action_dict):
+		"""Execute one joint action dictionary in Unity and check task progress."""
 		if self.steps > 245:
 			print("Warning: too many steps")
 		K = 500
@@ -409,6 +421,8 @@ class UnityEnvironment(BaseUnityEnvironment):
 		saying = [None for _ in range(len(actions))]
 		say = False
 		for i, action in enumerate(actions):
+			# Communication consumes a timestep but is not sent to Unity as a
+			# physical script; it is stored and exposed in the next observation.
 			random_flag = False
 			if action == 'send_message':
 				say = True
@@ -438,6 +452,8 @@ class UnityEnvironment(BaseUnityEnvironment):
 		print(f"Step {self.steps}, Executing script: {script_list_verbose}")
 
 		if len(script_list[0]) > 0:
+			# VirtualHome executes a pipe-separated joint script. We submit each
+			# individual action with skip_animation=True for faster symbolic tests.
 			if self.recording_options['recording']:
 				assert False, "Recording not supported"
 				success, message = self.comm.render_script(script_list,
@@ -491,6 +507,7 @@ class UnityEnvironment(BaseUnityEnvironment):
 		return obs, reward, done, info, messages
 
 	def get_observations(self):
+		"""Build per-agent observations from the latest Unity graph or images."""
 		curr_graph = self.get_graph()
 		curr_graph = utils.inside_not_trans(curr_graph)
 		self.full_graph = curr_graph

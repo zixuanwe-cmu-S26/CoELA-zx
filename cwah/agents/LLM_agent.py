@@ -3,7 +3,11 @@ from LLM import *
 
 class LLM_agent:
 	"""
-	LLM agent class
+	Bridge between symbolic environment observations and the LLM planner.
+
+	This class maintains lightweight memory from visited rooms, converts visible
+	graph facts into progress summaries, asks LLM.run() for a high-level plan,
+	and translates that plan into executable VirtualHome actions.
 	"""
 	def __init__(self, agent_id, char_index, args):
 		self.debug = args.debug
@@ -140,6 +144,7 @@ class LLM_agent:
 
 
 	def LLM_plan(self):
+		"""Ask the language model for the next high-level plan."""
 		if len(self.grabbed_objects) == 2:
 			return f"[goput] {self.goal_location}", {}
 
@@ -147,6 +152,7 @@ class LLM_agent:
 
 
 	def check_progress(self, state, goal_spec):
+		"""Track which goal objects this agent can already see as satisfied."""
 		unsatisfied = {}
 		satisfied = []
 		id2node = {node['id']: node for node in state['nodes']}
@@ -168,6 +174,7 @@ class LLM_agent:
 
 
 	def filter_graph(self, obs):
+		"""Drop observation nodes unrelated to the current goal or navigation."""
 		relative_id = [node['id'] for node in obs['nodes'] if node['class_name'] in self.all_relative_name]
 		relative_id = [x for x in relative_id if all([x != y['id'] for y in self.satisfied])]
 		new_graph = {
@@ -187,6 +194,8 @@ class LLM_agent:
 		:param goal:{predicate:[count, True, 2]}
 		:return:
 		"""
+		# 1) Fold communication into dialogue history, then update visible task
+		# progress and room/object memory from the symbolic graph observation.
 		if self.communication:
 			for i in range(len(observation["messages"])):
 				if observation["messages"][i] is not None:
@@ -259,6 +268,9 @@ class LLM_agent:
 		action = None
 		LM_times = 0
 		while action is None:
+			# 2) If there is no active plan, ask the LLM for one. The helper
+			# methods below then refine [gograb]/[gocheck]/[goput] into concrete
+			# walk/open/grab/put actions valid for the current room state.
 			if self.plan is None:
 				if LM_times > 0:
 					print(info)
@@ -316,6 +328,7 @@ class LLM_agent:
 		return action, info
 
 	def reset(self, obs, containers_name, goal_objects_name, rooms_name, room_info, goal):
+		"""Initialize per-episode memory from the first observation and goal."""
 		self.steps = 0
 		self.containers_name = containers_name
 		self.goal_objects_name = goal_objects_name

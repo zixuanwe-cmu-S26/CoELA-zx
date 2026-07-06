@@ -15,10 +15,11 @@ from algos.arena_mp2 import ArenaMP
 
 
 if __name__ == '__main__':
+    # This script is the experiment driver for symbolic-observation tests with two
+    # LLM agents. It loads task cases, builds an ArenaMP controller, and records
+    # per-episode logs/results under ../test_results/<mode>.
     args = get_args()
     env_task_set = pickle.load(open(args.dataset_path, 'rb'))
-    # with open("test_env.json", "w") as f:
-    #     json.dump(env_task_set, f, indent=4)
 
     args.record_dir = f'../test_results/{args.mode}' # set the record_dir right!
     Path(args.record_dir).mkdir(parents=True, exist_ok=True)
@@ -50,6 +51,8 @@ if __name__ == '__main__':
 
 
     def env_fn(env_id):
+        # ArenaMP expects a factory so it can create/recreate the environment
+        # using its own arena id and port bookkeeping.
         return UnityEnvironment(num_agents=2,
                                max_episode_length=args.max_episode_length,
                                port_id=env_id,
@@ -71,10 +74,14 @@ if __name__ == '__main__':
         'args': args,
     }
 
+    # Agent factories share ArenaMP's uniform factory signature
+    # (arena_id, env). The current LLM_agent constructor does not need those two
+    # values, so the lambdas intentionally ignore x and y.
     agents = [lambda x, y: LLM_agent(**args_agent1), lambda x, y: LLM_agent(**args_agent2)]
     arena = ArenaMP(args.max_episode_length, id_run, env_fn, agents, args.record_dir, args.debug)
 
-    # copy the code below to record results
+    # Choose a subset of default task ids when num_per_task is overridden;
+    # otherwise evaluate every case in the loaded dataset.
     if args.num_per_task != 10:
         test_episodes = args.test_task
     else:
@@ -104,6 +111,8 @@ if __name__ == '__main__':
                                             'L': L[episode_id]}
                 continue
 
+            # One episode consists of resetting the environment to a task case
+            # and letting ArenaMP run observe -> act -> execute until done.
             print('episode:', episode_id)
 
             for it_agent, agent in enumerate(arena.agents):
@@ -145,4 +154,3 @@ if __name__ == '__main__':
         print('average steps (finishing the tasks):', np.array(steps_list).mean() if len(steps_list) > 0 else None)
         print('failed_tasks:', failed_tasks)
         pickle.dump(test_results, open(args.record_dir + '/results.pik', 'wb'))
-
